@@ -1,11 +1,11 @@
+import cv2
+import numpy as np
+import time
 import subprocess
 import logging
 from control import *
-import time
 import datetime
 from Constants import *
-import cv2
-import numpy as np
 import os
 import fcntl
 import mmap
@@ -14,7 +14,58 @@ import array
 
 cv2.ocl.setUseOpenCL(False)
 
-# Run I2C commands to set the slave address and IO debug
+def draw_rectangle(image, top_left, bottom_right, text):
+    color = (0, 255, 0)
+    cv2.rectangle(image, top_left, bottom_right, color, 2)
+
+    center_x = (top_left[0] + bottom_right[0]) // 2
+    center_y = (top_left[1] + bottom_right[1]) // 2
+    
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    font_thickness = 1
+    text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+    
+    text_x = center_x - text_size[0] // 2
+    text_y = center_y + text_size[1] // 2
+
+    cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
+
+    return image
+
+def draw_grid_of_rectangles(image, rows=2, cols=5):
+    img_height, img_width, _ = image.shape
+
+    rect_width = int(img_width // (cols + 1))
+    rect_height = int(img_height // (rows + 2))
+    spacing_x = rect_width // 5
+    spacing_y = rect_height // 4
+
+    idx = 1
+
+    for row in range(rows):
+        for col in range(cols):
+            top_left_x = (col + 1) * spacing_x + col * rect_width
+            top_left_y = (row + 1) * spacing_y + row * rect_height
+            bottom_right_x = top_left_x + rect_width
+            bottom_right_y = top_left_y + rect_height
+
+            image = draw_rectangle(image, (top_left_x, top_left_y), (bottom_right_x, bottom_right_y), str(idx))
+            idx += 1
+    return image
+
+def add_click_text(image):
+    img_height, img_width, _ = image.shape
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_thickness = 2
+    text = "Click"
+    text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+    text_x = (img_width - text_size[0]) // 2  
+    text_y = img_height - 20  
+    cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
+    return image
+
 def run_i2c_commands():
     commands = [
         "i2cset -y 2 0x1b 0x0b 0x00 0x00 0x00 0x00 i",
@@ -33,41 +84,7 @@ def run_i2c_commands():
             print("Exception while executing command: {}".format(cmd))
             print("Exception details: {}".format(str(e)))
 
-def draw_grid_of_rectangles(image, rows=2, cols=5):
-    height, width = image.shape[:2]
 
-    rect_width = int(0.5*width // (cols + 1))
-    rect_height = int(0.5*height // (rows + 2))
-    spacing_x = rect_width // 5
-    spacing_y = rect_height // 4
-
-    idx = 1
-
-    for row in range(rows):
-        for col in range(cols):
-            top_left_x = 300+(col + 1) * spacing_x + col * rect_width
-            top_left_y = 500+(row + 1) * spacing_y + row * rect_height
-            bottom_right_x = top_left_x + rect_width
-            bottom_right_y = top_left_y + rect_height
-
-            cv2.rectangle(image, (top_left_x, top_left_y), (bottom_right_x, bottom_right_y), (0, 255, 0), 2)
-            
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 1
-            font_thickness = 2
-            text = str(idx)
-            text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
-            
-            text_x = top_left_x + (rect_width - text_size[0]) // 2
-            text_y = top_left_y + (rect_height + text_size[1]) // 2
-
-            cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
-            
-            idx += 1
-
-    return image
-
-# Write the image to the framebuffer
 def write_to_framebuffer(image):
     try:
         with open('/dev/fb0', 'r+b') as f:
@@ -102,60 +119,6 @@ def write_to_framebuffer(image):
     except Exception as e:
         print("Error writing to framebuffer: {}".format(str(e)))
 
-# Display the image on the DLP2000
-def opencv_display():
-    width, height = 720, 480
-    frame_count = 0
-    duration = 3600
-
-    start_time = time.time()
-    while time.time() - start_time < duration:
-        try:
-            #draw green background
-            img = np.full((height, width, 3), (0, 255, 0), dtype=np.uint8)
-
-            # Create a black background
-            #img = np.zeros((height, width, 3), dtype=np.uint8)
-
-            # Draw a moving circle
-            #center = (int(width/2 + 100*np.sin(frame_count*0.05)), int(height/2))
-            #cv2.circle(img, center, 50, (0, 0, 255), -1)
-
-            # Draw a rectangle
-            #cv2.rectangle(img, (100, 100), (200, 200), (0, 255, 0), 3)
-
-            # Draw a triangle
-            #pts = np.array([[300, 100], [200, 300], [400, 300]], np.int32)
-            #cv2.fillPoly(img, [pts], (255, 255, 0))
-
-            # Draw some text
-            #font = cv2.FONT_HERSHEY_SIMPLEX
-            #cv2.putText(img, 'DLP2000 Test', (10, 30), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
-
-            # Draw grid of rectangles
-            #img = draw_grid_of_rectangles(img)
-
-            # Write the image to the framebuffer
-            write_to_framebuffer(img)
-
-            # Save image every minute
-            if frame_count % 3600 == 0:  
-                cv2.imwrite('dlp2000_output_{}.png'.format(frame_count//3600), img)
-                print("Image saved at {} minutes.".format(frame_count//3600))
-
-            frame_count += 1
-
-            # Add a small delay to control frame rate
-            time.sleep(0.016)  # Approximately 60 FPS
-        except Exception as e:
-            print("Error in opencv_display: {}".format(str(e)))
-            break
-
-    cv2.imwrite('dlp2000_output_final.png', img)
-    print("Final image has been saved.")
-
-    return "OpenCV images displayed for 1 hour and saved periodically. (Pass/Fail/Stop)"
-
 def initialize_display():
     print("Initializing display...")
     run_i2c_commands()
@@ -168,13 +131,27 @@ def initialize_display():
     time.sleep(1)
     run_i2c_commands()
 
+def draw_border_and_markers(image):
+    height, width = image.shape[:2]
+    border_color = (255, 0, 0)  
+    marker_color = (0, 255, 0) 
+    thickness = 2
+    marker_size = 20
+
+    cv2.rectangle(image, (0, 0), (width-1, height-1), border_color, thickness)
+
+    cv2.rectangle(image, (0, 0), (marker_size, marker_size), marker_color, -1)
+    cv2.rectangle(image, (width-marker_size, 0), (width, marker_size), marker_color, -1)
+    cv2.rectangle(image, (0, height-marker_size), (marker_size, height), marker_color, -1)
+    cv2.rectangle(image, (width-marker_size, height-marker_size), (width, height), marker_color, -1)
+
+    return image
+
 def main():
-    Test_name = 'OpenCV DLP2000 Test'
+    Test_name = 'OpenCV DLP2000 Keyboard Test'
     
-    # Setup the Test name
     datalog = DataLog(LogDir, Test_name)
 
-    # General setup
     logging.getLogger().setLevel(logging.DEBUG)  
     print("Opening DLP2000...")
     DPP2607_Open()
@@ -189,9 +166,31 @@ def main():
     try:
         initialize_display()
         
-        print("Running OpenCV display...")
-        result = opencv_display()
+        width, height = 720, 480
+        frame_count = 0
+        duration = 3600
+
+        start_time = time.time()
+        while time.time() - start_time < duration:
+            image = np.zeros((height, width, 3), dtype=np.uint8)
+
+            frame = draw_grid_of_rectangles(image)
+            frame = add_click_text(frame)
+            frame = draw_border_and_markers(frame)
+
+            write_to_framebuffer(frame)
+
+            if frame_count % 3600 == 0:  
+                cv2.imwrite('dlp2000_keyboard_output_{}.png'.format(frame_count//3600), frame)
+                print("Image saved at {} minutes.".format(frame_count//3600))
+
+            frame_count += 1
+            time.sleep(0.016)  # Approximately 60 FPS
+
+        cv2.imwrite('dlp2000_keyboard_output_final.png', frame)
+        print("Final image has been saved.")
         
+        result = "OpenCV keyboard images displayed for 1 hour and saved periodically. (Pass/Fail/Stop)"
         print("Display result: {}".format(result))
         
         datalog.add_col('Test name', Test_name)
@@ -208,9 +207,8 @@ def main():
         datalog.add_col('P/F Result', "Fail")
         datalog.log()
     finally:
-        # Cleanup
         print("Cleaning up...")
-        run_i2c_commands()  # Run I2C commands one last time
+        run_i2c_commands()
         DPP2607_Close()
         datalog.close()
 

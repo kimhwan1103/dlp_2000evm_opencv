@@ -11,10 +11,89 @@ import fcntl
 import mmap
 import struct
 import array
+import socket
+import threading
 
 cv2.ocl.setUseOpenCL(False)
 
-# Run I2C commands to set the slave address and IO debug
+received_message = ""
+message_lock = threading.Lock()
+
+def draw_rectangle(image, top_left, bottom_right, text, is_finger_inside):
+    color = (0, 0, 255) if is_finger_inside else (0, 255, 0)  
+    cv2.rectangle(image, top_left, bottom_right, color, 2)
+
+    center_x = (top_left[0] + bottom_right[0]) // 2
+    center_y = (top_left[1] + bottom_right[1]) // 2
+    
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_thickness = 2
+    text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+    
+    text_x = center_x - text_size[0] // 2
+    text_y = center_y + text_size[1] // 2
+
+    cv2.putText(image, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
+
+    return image
+
+def draw_grid_of_rectangles(image, rows=2, cols=5):
+    img_height, img_width , _= image.shape
+
+    rect_width = int(0.5*img_width // (cols + 1))  
+    rect_height = int(0.5*img_height // (rows + 2))  
+    spacing_x = rect_width // 5
+    spacing_y = rect_height // 4
+
+    idx = 1
+
+    for row in range(rows):
+        for col in range(cols):
+            # 사각형의 좌측 상단과 우측 하단 좌표 계산
+            top_left_x = 300+(col + 1) * spacing_x + col * rect_width
+            top_left_y = 500+(row + 1) * spacing_y + row * rect_height
+            bottom_right_x = top_left_x + rect_width
+            bottom_right_y = top_left_y + rect_height
+            
+
+            if finger_pos is not None:
+                # 손가락 끝 좌표가 사각형 내부에 있는지 확인
+                is_finger_inside = is_finger_in_rectangle(finger_pos, (top_left_x, top_left_y), (bottom_right_x, bottom_right_y))
+            else:
+                is_finger_inside = False
+
+            # 사각형 그리기 (손가락이 사각형 안에 있으면 색상을 변경)
+            image = draw_rectangle(image, (top_left_x, top_left_y), (bottom_right_x, bottom_right_y), str(idx), is_finger_inside)
+            idx += 1
+    return image
+
+def tcp_server():
+    global received_message
+    host = '0.0.0.0'  # Server hostname
+    port = 12345  # Port number to use
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((host, port))
+    server_socket.listen(1)
+
+    print("Server is waiting on %s:%s..." % (host, port))
+
+    while True:
+        client_socket, addr = server_socket.accept()
+        print("Client connected from %s" % str(addr))
+
+        data = client_socket.recv(1024).decode()
+        print("Message received from client: %s" % data)
+
+        with message_lock:
+            received_message = data.decode()
+
+        response = "Response message from server"
+        client_socket.send(response)
+
+        client_socket.close()
+
 def run_i2c_commands():
     commands = [
         "i2cset -y 2 0x1b 0x0b 0x00 0x00 0x00 0x00 i",
@@ -67,7 +146,6 @@ def draw_grid_of_rectangles(image, rows=2, cols=5):
 
     return image
 
-# Write the image to the framebuffer
 def write_to_framebuffer(image):
     try:
         with open('/dev/fb0', 'r+b') as f:
@@ -102,38 +180,50 @@ def write_to_framebuffer(image):
     except Exception as e:
         print("Error writing to framebuffer: {}".format(str(e)))
 
-# Display the image on the DLP2000
 def opencv_display():
+    global received_message
     width, height = 720, 480
     frame_count = 0
     duration = 3600
+    display_click = False
 
     start_time = time.time()
     while time.time() - start_time < duration:
         try:
-            #draw green background
-            img = np.full((height, width, 3), (0, 255, 0), dtype=np.uint8)
-
             # Create a black background
-            #img = np.zeros((height, width, 3), dtype=np.uint8)
+            img = np.zeros((height, width, 3), dtype=np.uint8)
 
             # Draw a moving circle
-            #center = (int(width/2 + 100*np.sin(frame_count*0.05)), int(height/2))
-            #cv2.circle(img, center, 50, (0, 0, 255), -1)
+            center = (int(width/2 + 100*np.sin(frame_count*0.05)), int(height/2))
+            cv2.circle(img, center, 50, (0, 0, 255), -1)
 
             # Draw a rectangle
-            #cv2.rectangle(img, (100, 100), (200, 200), (0, 255, 0), 3)
+            cv2.rectangle(img, (100, 100), (200, 200), (0, 255, 0), 3)
 
             # Draw a triangle
-            #pts = np.array([[300, 100], [200, 300], [400, 300]], np.int32)
-            #cv2.fillPoly(img, [pts], (255, 255, 0))
+            pts = np.array([[300, 100], [200, 300], [400, 300]], np.int32)
+            cv2.fillPoly(img, [pts], (255, 255, 0))
 
             # Draw some text
-            #font = cv2.FONT_HERSHEY_SIMPLEX
-            #cv2.putText(img, 'DLP2000 Test', (10, 30), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(img, 'DLP2000 TCPTest', (10, 30), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
             # Draw grid of rectangles
-            #img = draw_grid_of_rectangles(img)
+            img = draw_grid_of_rectangles(img)
+
+            with message_lock:
+                if "CLICK" in received_message:
+                    display_click = True
+                    received_message = ""
+                else:
+                    display_click = False
+                    received_message = ""
+
+            if display_click:
+                cv2.putText(img, 'Click', (width//2, height//2), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+                print("Displaying 'Click' on screen")
+            else:
+                print("Not displaying 'Click' on screen")
 
             # Write the image to the framebuffer
             write_to_framebuffer(img)
@@ -142,6 +232,7 @@ def opencv_display():
             if frame_count % 3600 == 0:  
                 cv2.imwrite('dlp2000_output_{}.png'.format(frame_count//3600), img)
                 print("Image saved at {} minutes.".format(frame_count//3600))
+                received_message = ""
 
             frame_count += 1
 
@@ -169,7 +260,7 @@ def initialize_display():
     run_i2c_commands()
 
 def main():
-    Test_name = 'OpenCV DLP2000 Test'
+    Test_name = 'OpenCV DLP2000 TCP Test'
     
     # Setup the Test name
     datalog = DataLog(LogDir, Test_name)
@@ -188,6 +279,11 @@ def main():
 
     try:
         initialize_display()
+
+        print("Running TCP server...")
+        tcp_thread = threading.Thread(target=tcp_server)
+        tcp_thread.daemon = True
+        tcp_thread.start()
         
         print("Running OpenCV display...")
         result = opencv_display()
